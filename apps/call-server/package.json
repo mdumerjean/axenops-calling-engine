@@ -4,10 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx src/index.ts",
+    "dev": "node --import tsx src/index.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@fastify/formbody": "^9.0.0",
     "@fastify/websocket": "^11.3.0",
     "@openai/agents": "^0.17.0",
     "@openai/agents-extensions": "^0.17.0",
