@@ -4,6 +4,7 @@ import { gatekeeperScript } from "../playbooks/gatekeeper-script.js";
 import { objectionLibrary } from "../playbooks/objections.js";
 import { productKnowledge } from "../playbooks/product-knowledge.js";
 import {
+  personaInstructions,
   safetyManagerBehavioralInstructions,
   safetyManagerScript
 } from "../playbooks/safety-manager-script.js";
@@ -35,6 +36,8 @@ function commonInstructions() {
     formatList(productKnowledge.approvedFacts),
     "Prohibited product claims:",
     formatList(productKnowledge.prohibitedClaims),
+    "Persona and tone:",
+    formatList(personaInstructions.instructions),
     "Behavior:",
     formatList(safetyManagerBehavioralInstructions.instructions),
     "Objection library:",
