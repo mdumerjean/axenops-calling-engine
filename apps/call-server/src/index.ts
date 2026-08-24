@@ -2,8 +2,15 @@ import Fastify from "fastify";
 import formbody from "@fastify/formbody";
 import websocket from "@fastify/websocket";
 import { TwilioRealtimeTransportLayer } from "@openai/agents-extensions";
-import { RealtimeAgent, RealtimeSession } from "@openai/agents/realtime";
+import { RealtimeSession } from "@openai/agents/realtime";
 import twilio from "twilio";
+import { createRealtimeAgentForState } from "./realtime/agent-factory.js";
+import { CallStateMachine } from "./state-machine/call-state-machine.js";
+import {
+  defaultStartState,
+  isConversationState,
+  type ConversationState
+} from "./state-machine/states.js";
 
 type RequiredEnv = {
   OPENAI_API_KEY: string;
@@ -15,10 +22,13 @@ type RequiredEnv = {
 
 type OutboundCallBody = {
   to?: unknown;
+  startState?: unknown;
 };
 
 type TwilioWebhookParams = {
   CallSid?: unknown;
+  startState?: unknown;
+  StartState?: unknown;
 };
 
 const requiredEnvNames = [
@@ -53,10 +63,33 @@ function publicHttpUrl(baseUrl: string, path: string) {
   return new URL(path, baseUrl).toString();
 }
 
-function publicWebSocketUrl(baseUrl: string, path: string) {
+function publicHttpUrlWithStartState(
+  baseUrl: string,
+  path: string,
+  startState: ConversationState
+) {
+  const url = new URL(path, baseUrl);
+  url.searchParams.set("startState", startState);
+  return url.toString();
+}
+
+function publicWebSocketUrl(
+  baseUrl: string,
+  path: string,
+  startState: ConversationState
+) {
   const url = new URL(path, baseUrl);
   url.protocol = "wss:";
+  url.searchParams.set("startState", startState);
   return url.toString();
+}
+
+function readStartState(value: unknown): ConversationState | undefined {
+  return isConversationState(value) ? value : undefined;
+}
+
+function getTwilioParamStartState(params: TwilioWebhookParams | undefined) {
+  return readStartState(params?.startState) ?? readStartState(params?.StartState);
 }
 
 function logCall(event: string, callSid: string | undefined, data = {}) {
@@ -71,11 +104,6 @@ function logCall(event: string, callSid: string | undefined, data = {}) {
 
 const env = loadRequiredEnv();
 const twilioClient = twilio(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
-const agent = new RealtimeAgent({
-  name: "Test Voice Assistant",
-  instructions:
-    "You are a friendly, natural-sounding voice assistant conducting a brief test phone call. Keep responses short. If the person starts talking while you're speaking, stop immediately and listen. This is a technical test call, not a sales call."
-});
 
 const server = Fastify({ logger: true });
 
@@ -85,7 +113,8 @@ await server.register(formbody);
 server.get("/health", async () => ({ ok: true }));
 
 server.post<{ Body: OutboundCallBody }>("/calls/outbound", async (request, reply) => {
-  const { to } = request.body ?? {};
+  const { to, startState: rawStartState } = request.body ?? {};
+  const startState = readStartState(rawStartState) ?? defaultStartState;
 
   if (typeof to !== "string" || !e164Pattern.test(to)) {
     return reply.code(400).send({
@@ -96,11 +125,11 @@ server.post<{ Body: OutboundCallBody }>("/calls/outbound", async (request, reply
   const call = await twilioClient.calls.create({
     from: env.TWILIO_PHONE_NUMBER,
     to,
-    url: publicHttpUrl(env.PUBLIC_BASE_URL, "/twiml"),
+    url: publicHttpUrlWithStartState(env.PUBLIC_BASE_URL, "/twiml", startState),
     method: "POST"
   });
 
-  logCall("outbound_call_initiated", call.sid, { to });
+  logCall("outbound_call_initiated", call.sid, { to, startState });
 
   return reply.send({ callSid: call.sid });
 });
@@ -115,18 +144,23 @@ server.route({
     const query = typeof request.query === "object" && request.query !== null
       ? request.query as TwilioWebhookParams
       : undefined;
+    const startState =
+      getTwilioParamStartState(body) ??
+      getTwilioParamStartState(query) ??
+      defaultStartState;
     const callSid = typeof body?.CallSid === "string"
       ? body.CallSid
       : typeof query?.CallSid === "string"
         ? query.CallSid
       : undefined;
-    const streamUrl = publicWebSocketUrl(env.PUBLIC_BASE_URL, "/media-stream");
+    const streamUrl = publicWebSocketUrl(env.PUBLIC_BASE_URL, "/media-stream", startState);
     const response = new twilio.twiml.VoiceResponse();
     const connect = response.connect();
+    const stream = connect.stream({ url: streamUrl });
 
-    connect.stream({ url: streamUrl });
+    stream.parameter({ name: "startState", value: startState });
 
-    logCall("twilio_webhook_hit", callSid, { streamUrl });
+    logCall("twilio_webhook_hit", callSid, { streamUrl, startState });
 
     return reply
       .type("text/xml")
@@ -134,16 +168,25 @@ server.route({
   }
 });
 
-server.get("/media-stream", { websocket: true }, async (connection) => {
+server.get("/media-stream", { websocket: true }, async (connection, request) => {
   let callSid: string | undefined;
+  const query = typeof request.query === "object" && request.query !== null
+    ? request.query as TwilioWebhookParams
+    : undefined;
+  let startState =
+    getTwilioParamStartState(query) ??
+    defaultStartState;
+  const stateMachine = new CallStateMachine(callSid, startState);
 
-  logCall("media_stream_connected", callSid);
+  logCall("media_stream_connected", callSid, { startState });
 
   const transport = new TwilioRealtimeTransportLayer({
     twilioWebSocket: connection
   });
 
-  const session = new RealtimeSession(agent, {
+  const createAgent = (state: ConversationState) =>
+    createRealtimeAgentForState(state, { stateMachine });
+  const session = new RealtimeSession(createAgent(stateMachine.state), {
     transport,
     model: "gpt-realtime-2.1",
     config: {
@@ -155,7 +198,11 @@ server.get("/media-stream", { websocket: true }, async (connection) => {
     }
   });
 
-  session.on("transport_event", (event) => {
+  stateMachine.onStateChange(async (state) => {
+    await session.updateAgent(createAgent(state));
+  });
+
+  session.on("transport_event", async (event) => {
     if (
       event.type === "twilio_message" &&
       typeof event.data === "object" &&
@@ -163,13 +210,31 @@ server.get("/media-stream", { websocket: true }, async (connection) => {
     ) {
       const message = event.data as {
         event?: string;
-        start?: { callSid?: string };
+        start?: {
+          callSid?: string;
+          customParameters?: Record<string, string>;
+        };
       };
 
       if (message.event === "start" && message.start?.callSid) {
         callSid = message.start.callSid;
+        stateMachine.setCallSid(callSid);
+        startState =
+          readStartState(message.start.customParameters?.startState) ??
+          startState;
+        if (startState !== stateMachine.state) {
+          await stateMachine.transition(startState, "twilio_stream_start_custom_parameter");
+        }
         logCall("media_stream_start_received", callSid);
       }
+      return;
+    }
+
+    if (
+      event.type === "conversation.item.input_audio_transcription.completed" &&
+      typeof event.transcript === "string"
+    ) {
+      await stateMachine.handleTranscript(event.transcript);
     }
   });
 
