@@ -192,7 +192,7 @@ server.get("/media-stream", { websocket: true }, async (connection, request) => 
     config: {
       audio: {
         output: {
-          voice: "verse"
+          voice: "marin"
         }
       }
     }
