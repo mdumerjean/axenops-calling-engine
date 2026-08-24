@@ -4,8 +4,13 @@ import { gatekeeperScript } from "../playbooks/gatekeeper-script.js";
 import { objectionLibrary } from "../playbooks/objections.js";
 import { productKnowledge } from "../playbooks/product-knowledge.js";
 import {
+  gatekeeperToolInstructions,
   personaInstructions,
+  referencePronunciations,
   safetyManagerBehavioralInstructions,
+  safetyManagerInstructionRules,
+  safetyManagerToolInstructions,
+  sharedInstructionRules,
   safetyManagerScript
 } from "../playbooks/safety-manager-script.js";
 import type { CallStateMachine } from "../state-machine/call-state-machine.js";
@@ -36,6 +41,8 @@ function commonInstructions() {
     formatList(productKnowledge.approvedFacts),
     "Prohibited product claims:",
     formatList(productKnowledge.prohibitedClaims),
+    referencePronunciations.instructions.join("\n"),
+    sharedInstructionRules.instructions.join("\n"),
     personaInstructions.instructions.join("\n"),
     "Behavior:",
     formatList(safetyManagerBehavioralInstructions.instructions),
@@ -69,6 +76,7 @@ function instructionsForState(state: ConversationState) {
         `Objective: ${gatekeeperScript.objective}`,
         `Accept equivalent titles: ${gatekeeperScript.equivalentTitles.join(", ")}.`,
         `Style: ${gatekeeperScript.style}`,
+        gatekeeperToolInstructions.instructions.join("\n"),
         "Hard guardrails:",
         formatList(gatekeeperScript.hardGuardrails),
         "If the gatekeeper offers a name, direct line, or email for the Safety Manager, call log_discovered_contact."
@@ -124,7 +132,9 @@ function instructionsForState(state: ConversationState) {
         "Why calling: pick whichever pain resonates; do not recite both mechanically.",
         formatList(safetyManagerScript.whyCallingOptions),
         `Meeting ask: "${safetyManagerScript.meetingAsk}"`,
-        `Primary CTA: ${safetyManagerScript.primaryCta}`
+        `Primary CTA: ${safetyManagerScript.primaryCta}`,
+        safetyManagerInstructionRules.instructions.join("\n"),
+        safetyManagerToolInstructions.instructions.join("\n")
       ].join("\n\n");
   }
 }
