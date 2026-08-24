@@ -117,6 +117,7 @@ function instructionsForState(state: ConversationState) {
         `Script version: ${safetyManagerScript.version}`,
         `General opener: "${safetyManagerScript.variants.general.opener}"`,
         `Construction opener if first name is known: "${safetyManagerScript.variants.construction.opener}"`,
+        "After the opener, wait for the prospect to confirm they are the safety contact or an equivalent title before moving to the permission ask. Equivalent safety titles count as confirmation; wrong-person answers require asking who to speak with instead.",
         `Permission: "${safetyManagerScript.permission}"`,
         "Why calling: pick whichever pain resonates; do not recite both mechanically.",
         formatList(safetyManagerScript.whyCallingOptions),
